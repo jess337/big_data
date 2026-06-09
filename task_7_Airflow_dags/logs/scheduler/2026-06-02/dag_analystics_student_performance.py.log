@@ -1,0 +1,15 @@
+[2026-06-02T19:26:45.751+0000] {processor.py:186} INFO - Started process (PID=172) to work on /opt/airflow/dags/dag_analystics_student_performance.py
+[2026-06-02T19:26:45.752+0000] {processor.py:914} INFO - Processing file /opt/airflow/dags/dag_analystics_student_performance.py for tasks to queue
+[2026-06-02T19:26:45.756+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:45.756+0000] {dagbag.py:588} INFO - Filling up the DagBag from /opt/airflow/dags/dag_analystics_student_performance.py
+[2026-06-02T19:26:45.806+0000] {processor.py:925} INFO - DAG(s) 'create_student_performance_mart' retrieved from /opt/airflow/dags/dag_analystics_student_performance.py
+[2026-06-02T19:26:46.054+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.053+0000] {override.py:1911} INFO - Created Permission View: can read on DAG:create_student_performance_mart
+[2026-06-02T19:26:46.063+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.063+0000] {override.py:1911} INFO - Created Permission View: can edit on DAG:create_student_performance_mart
+[2026-06-02T19:26:46.072+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.072+0000] {override.py:1911} INFO - Created Permission View: can delete on DAG:create_student_performance_mart
+[2026-06-02T19:26:46.079+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.079+0000] {override.py:1911} INFO - Created Permission View: can read on DAG Run:create_student_performance_mart
+[2026-06-02T19:26:46.085+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.085+0000] {override.py:1911} INFO - Created Permission View: menu access on DAG Run:create_student_performance_mart
+[2026-06-02T19:26:46.090+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.090+0000] {override.py:1911} INFO - Created Permission View: can create on DAG Run:create_student_performance_mart
+[2026-06-02T19:26:46.096+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.096+0000] {override.py:1911} INFO - Created Permission View: can delete on DAG Run:create_student_performance_mart
+[2026-06-02T19:26:46.096+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.096+0000] {dag.py:3239} INFO - Sync 1 DAGs
+[2026-06-02T19:26:46.106+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.106+0000] {dag.py:3262} INFO - Creating ORM DAG for create_student_performance_mart
+[2026-06-02T19:26:46.107+0000] {logging_mixin.py:190} INFO - [2026-06-02T19:26:46.107+0000] {dag.py:4180} INFO - Setting next_dagrun for create_student_performance_mart to None, run_after=None
+[2026-06-02T19:26:46.122+0000] {processor.py:208} INFO - Processing /opt/airflow/dags/dag_analystics_student_performance.py took 0.379 seconds
