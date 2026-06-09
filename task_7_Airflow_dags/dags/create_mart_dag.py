@@ -1,36 +1,60 @@
 # dags/create_mart_dag.py
+# Данный DAG (Directed Acyclic Graph) автоматизирует создание и обновление упрощённой аналитической витрины
+# dmr.analytics_student. В отличие от расширенной версии, эта витрина содержит только базовые поля:
+# студент, курс, кафедра, семестр, курс обучения и итоговая оценка.
+
+# Импорт основного класса DAG для создания контейнера задач
 from airflow import DAG
+# Импорт оператора, позволяющего выполнять произвольную Python-функцию
 from airflow.operators.python import PythonOperator
+# Импорт модулей для работы с датами, временем и интервалами (расписание, задержки)
 from datetime import datetime, timedelta
+# Импорт sys для манипуляции путями поиска модулей
 import sys
+# Импорт os для построения путей к файлам и папкам
 import os
 
-# Добавляем путь к папке scripts
+# Добавляем в переменную окружения PYTHONPATH путь к папке 'scripts',
+# Это необходимо, чтобы импортировать скрипт build_mart.py, лежащий в подпапке 'scripts'.
+# os.path.dirname(__file__) — возвращает путь к папке, где лежит этот файл (dags/).
+# os.path.join(...) — склеивает этот путь с именем подпапки 'scripts'.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scripts'))
+
+# Импортируем функцию create_mart из скрипта build_mart.py.
+# Эта функция отвечает за подключение к базе данных, создание схемы dmr,
+# создание таблицы analytics_student и её заполнение агрегированными данными.
 from build_mart import create_mart
 
+# Словарь с настройками по умолчанию, которые будут применяться ко всем задачам DAG.
+# Каждый параметр можно переопределить внутри конкретной задачи.
 default_args = {
-    'owner': 'Korchagina',
-    'depends_on_past': False,
-    'start_date': datetime(2026, 1, 1),
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    'owner': 'Korchagina',               # Имя владельца DAG 
+    'depends_on_past': False,            # Зависимость от успеха предыдущего запуска DAG. False — каждый запуск независим.
+    'start_date': datetime(2026, 1, 1),  # Дата, с которой DAG начнёт планировать запуски 
+    'email_on_failure': False,           # Не отправлять уведомления по email при сбое задачи
+    'email_on_retry': False,             # Не отправлять уведомления при повторной попытке
+    'retries': 1,                        # Количество повторных попыток в случае ошибки выполнения задачи
+    'retry_delay': timedelta(minutes=5), # Пауза между повторными попытками (5 минут)
 }
 
+# Контекстный менеджер with создаёт DAG с указанными параметрами.
+# Все определённые внутри задачи автоматически привязываются к этому DAG.
 with DAG(
-    'create_analytics_mart',
-    default_args=default_args,
-    description='Создание и обновление витрины dmr.analytics_student',
-    schedule_interval='0 2 * * *',   # каждый день в 2:00
-    catchup=False,
-    tags=['mart', 'student'],
+    'create_analytics_mart',             # Уникальное имя DAG (отображается в веб-интерфейсе Airflow)
+    default_args=default_args,           # Передаём настройки по умолчанию
+    description='Создание и обновление витрины dmr.analytics_student',  # Описание для интерфейса
+    schedule_interval='0 2 * * *',       # Расписание в формате cron: каждый день в 2:00 ночи
+    catchup=False,                       # Не выполнять пропущенные запуски, если DAG включён после start_date
+    tags=['mart', 'student'],            # Теги для фильтрации и группировки DAG в интерфейсе
 ) as dag:
 
+    # Определяем задачу (task) с помощью PythonOperator.
+    # При выполнении DAG эта задача вызовет функцию create_mart, которая и построит витрину.
     create_mart_task = PythonOperator(
-        task_id='create_student_mart',
-        python_callable=create_mart,
+        task_id='create_student_mart',        # Внутренний идентификатор задачи (уникален внутри DAG)
+        python_callable=create_mart,          # Имя функции, которая будет вызвана
     )
 
+    # Запуск задачи. В данном случае задача одна, поэтому просто указываем её.
+    # Если бы было несколько задач, здесь можно было бы задать порядок,
     create_mart_task

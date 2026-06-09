@@ -1,70 +1,91 @@
+# docker-compose.yaml
+
+# Версия синтаксиса Docker Compose
 version: '3.8'
 
 x-airflow-common:
   &airflow-common
+  # Указываем, что образ нужно собрать из Dockerfile в текущей папке
   build: .
+  # Переменные окружения, которые попадут в каждый контейнер Airflow
   environment:
-    &airflow-common-env
+    &airflow-common-env   # Ещё один якорь, чтобы не дублировать переменные
+    # Настройки Airflow: какой исполнитель задач использовать (LocalExecutor — для одного узла)
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    # Строка подключения к метабазе PostgreSQL (используем сервис postgres)
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    # Ключ шифрования (пустая строка — отключаем шифрование)
     AIRFLOW__CORE__FERNET_KEY: ''
+    # При создании DAG'и не запускаются автоматически (нужно вручную включить в веб-интерфейсе)
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    # Не загружать примеры DAG'ов (чтобы не засорять интерфейс)
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    # Настройки аутентификации API Airflow (basic auth + сессии)
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    # Включить проверку здоровья планировщика (для healthcheck)
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    # Переменные для вашего скрипта (будут доступны в os.getenv)
+
+    # Переменные для подключения к ВАШЕЙ учебной базе данных (передаются в скрипты витрин)
     DB_HOST: ${DB_HOST}
     DB_PORT: ${DB_PORT}
     DB_NAME: ${DB_NAME}
     DB_USER: ${DB_USER}
     DB_PASSWORD: ${DB_PASSWORD}
+  # Тома (папки), которые будут проброшены из хост-системы в контейнер
   volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts   # монтируем папку со скриптом
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags       # Папка с DAG-файлами
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs       # Логи выполнения задач
+    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins # Плагины (если есть)
+    - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts # Папка со скриптами построения витрин (монтируем)
+  # Пользователь внутри контейнера: AIRFLOW_UID:0 (0 — root, но Airflow обычно не root; здесь используется для прав на запись логов)
   user: "${AIRFLOW_UID:-50000}:0"
+  # Контейнеры Airflow зависят от сервиса postgres 
   depends_on:
     postgres:
-      condition: service_healthy
+      condition: service_healthy   # Ждём, пока postgres пройдёт healthcheck
+
 
 services:
+  
   postgres:
-    image: postgres:13
+    image: postgres:13            # Официальный образ PostgreSQL версии 13
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}        # Пользователь (по умолчанию airflow)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # Пароль (airflow)
+      POSTGRES_DB: ${POSTGRES_DB}            # Имя базы (airflow)
     volumes:
-      - postgres-db-volume:/var/lib/postgresql/data
-    healthcheck:
+      - postgres-db-volume:/var/lib/postgresql/data  # Сохраняем данные между перезапусками
+    healthcheck:                  # Проверка готовности БД принимать запросы
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
-      interval: 10s
-      retries: 5
-      start_period: 5s
-    restart: always
+      interval: 10s               # Проверяем каждые 10 секунд
+      retries: 5                  # 5 неудачных попыток — помечаем как unhealthy
+      start_period: 5s            # Первая проверка через 5 секунд после старта
+    restart: always               # Всегда перезапускать, если упал
     ports:
-      - "5432:5432"   # порт для Airflow metadata (не конфликтует с вашим портом 5433)
+      - "5432:5432"               
+   
+
 
   airflow-webserver:
-    <<: *airflow-common
-    command: webserver
+    <<: *airflow-common           # Берём все настройки из якоря x-airflow-common
+    command: webserver            # Команда запуска: веб-сервер
     ports:
-      - "8080:8080"
-    healthcheck:
+      - "8080:8080"               # Пробрасываем порт 8080 на хост — http://localhost:8080
+    healthcheck:                  
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
     restart: always
     depends_on:
-      airflow-scheduler:
+      airflow-scheduler:          # Веб-сервер запускаем только после планировщика (но на самом деле можно параллельно, но для порядка)
         condition: service_started
 
+ 
   airflow-scheduler:
     <<: *airflow-common
-    command: scheduler
-    healthcheck:
+    command: scheduler            # Команда запуска: планировщик
+    healthcheck:                  # Проверка здоровья планировщика 
       test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
       interval: 30s
       timeout: 10s
@@ -73,15 +94,17 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    command: version
+    command: version              # По сути выполняет стандартную команду, но за счёт переменных окружения делает upgrade БД и создаёт пользователя
     environment:
-      <<: *airflow-common-env
-      _AIRFLOW_DB_UPGRADE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      <<: *airflow-common-env     # Все переменные из якоря
+      # Дополнительные переменные для инициализации:
+      _AIRFLOW_DB_UPGRADE: 'true'          # Обновить схему метабазы
+      _AIRFLOW_WWW_USER_CREATE: 'true'     # Создать веб-пользователя
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}   # Логин (по умолчанию airflow)
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}   # Пароль (airflow)
     profiles:
-      - init
+      - init                      
+
 
 volumes:
-  postgres-db-volume:
+  postgres-db-volume:   

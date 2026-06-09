@@ -1,37 +1,65 @@
 # dags/scripts/build_mart_performance.py
+# Этот скрипт строит расширенную аналитическую витрину dmr.analytics_student_performance.
+# В отличие от простой витрины, здесь рассчитываются метрики активности:
+# количество событий, просмотры, отправки заданий, стабильность, категория активности и др.
+
+# Импортируем модуль os для чтения переменных окружения (настройки подключения к БД)
 import os
+# Импортируем sys для аварийного выхода при критической ошибке
 import sys
+# Импортируем psycopg2 — адаптер PostgreSQL для Python
 import psycopg2
+# Импортируем sql для безопасного формирования SQL-запросов (защита от инъекций)
 from psycopg2 import sql
+# Импортируем execute_values для высокопроизводительной массовой вставки (пакетами)
 from psycopg2.extras import execute_values
 
 def get_db_config():
-    """Читает параметры подключения из переменных окружения."""
+    """
+    Считывает параметры подключения к базе данных из переменных окружения.
+    Эти переменные должны быть определены в контейнере Airflow (через .env файл или docker-compose).
+    Возвращает словарь, пригодный для передачи в psycopg2.connect(**config).
+    """
     config = {
-        'host': os.getenv('DB_HOST'),
-        'port': os.getenv('DB_PORT'),
-        'database': os.getenv('DB_NAME'),
-        'user': os.getenv('DB_USER'),
-        'password': os.getenv('DB_PASSWORD')
+        'host': os.getenv('DB_HOST'),       # Адрес сервера БД (например, host.docker.internal)
+        'port': os.getenv('DB_PORT'),       # Порт (у вас 5433)
+        'database': os.getenv('DB_NAME'),   # Имя базы данных (my_db_Korchagina)
+        'user': os.getenv('DB_USER'),       # Пользователь (Korchagina)
+        'password': os.getenv('DB_PASSWORD') # Пароль
     }
     return config
 
 def create_mart_performance():
-    """Создаёт и заполняет витрину dmr.analytics_student_performance."""
+    """
+    Главная функция построения расширенной витрины.
+    Выполняет:
+      1. Подключение к учебной БД.
+      2. Создание схемы dmr (если отсутствует).
+      3. Создание таблицы analytics_student_performance (если отсутствует).
+      4. Агрегацию данных из user_logs (события по неделям) и departments,
+         расчёт всех метрик, вставку/обновление записей (UPSERT).
+    """
     conn = None
     try:
+        # Получаем настройки подключения
         config = get_db_config()
         print(f"Подключение к {config['host']}:{config['port']} ...")
+
+        # Устанавливаем соединение с PostgreSQL
         conn = psycopg2.connect(**config)
+        # Отключаем автоматический коммит — управляем транзакциями вручную для целостности
         conn.autocommit = False
 
-        # 1. Создание схемы dmr
+        # ================== 1. Создание схемы dmr ==================
+        # Схема — это логическое пространство для группировки таблиц витрин.
         with conn.cursor() as cur:
             cur.execute("CREATE SCHEMA IF NOT EXISTS dmr;")
-            conn.commit()
+            conn.commit()   # Фиксируем создание схемы
         print("Схема dmr создана/существует.")
 
-        # 2. Создание таблицы (ваш код из лабораторной)
+        # ================== 2. Создание таблицы витрины ==================
+        # Таблица содержит все требуемые поля: от идентификаторов до агрегированных метрик.
+        # Первичный ключ — (student_id, course_id) — обеспечивает уникальность пары студент-курс.
         create_table_query = """
         CREATE TABLE IF NOT EXISTS dmr.analytics_student_performance (
             student_id          INTEGER NOT NULL,
@@ -61,8 +89,14 @@ def create_mart_performance():
             conn.commit()
         print("Таблица dmr.analytics_student_performance создана/существует.")
 
-        # 3. Заполнение данными (ваш же запрос fill_data_mart)
+        # ================== 3. Заполнение данными (сложная агрегация) ==================
+        # SQL-запрос разбит на несколько CTE (Common Table Expressions) для наглядности.
+        # Каждый этап последовательно преобразует сырые логи в итоговые строки витрины.
         sql_insert = """
+        -- CTE 1: weekly_agg — подготовка сырых данных.
+        --   - отбираем только строки с непустой оценкой (namer_level)
+        --   - преобразуем текстовые поля leveled и name_osno в целые числа (через приведение)
+        --   - оставляем только те строки, где leveled и name_osno состоят из цифр (регулярка '^[0-9]+$')
         WITH weekly_agg AS (
             SELECT 
                 userid,
@@ -84,6 +118,7 @@ def create_mart_performance():
               AND leveled ~ '^[0-9]+$'
               AND name_osno ~ '^[0-9]+$'
         ),
+        -- CTE 2: student_week_stats — явное приведение оценки к INTEGER.
         student_week_stats AS (
             SELECT 
                 userid,
@@ -102,6 +137,12 @@ def create_mart_performance():
                 s_a_submission_status_viewed
             FROM weekly_agg
         ),
+        -- CTE 3: aggregated — агрегация по студенту и курсу.
+        --   - MAX для полей, которые не меняются в рамках пары (кафедра, семестр, курс, оценка, уровень, основа)
+        --   - SUM для накопительных метрик (суммарные события, просмотры, отправки)
+        --   - AVG для среднего числа событий в неделю
+        --   - array_agg с сортировкой для получения недели с максимальной активностью
+        --   - consistency_score = доля недель, где была активность (s_all > 0)
         aggregated AS (
             SELECT 
                 userid AS student_id,
@@ -123,6 +164,8 @@ def create_mart_performance():
             FROM student_week_stats
             GROUP BY userid, courseid
         ),
+        -- CTE 4: with_department — присоединяем название кафедры из справочника departments
+        --   и преобразуем числовые коды уровня образования и основы обучения в понятные строки.
         with_department AS (
             SELECT 
                 a.*,
@@ -142,6 +185,10 @@ def create_mart_performance():
             FROM aggregated a
             LEFT JOIN public.departments d ON a.department_id = d.id
         ),
+        -- CTE 5: final_data — финальные вычисления: округление, категория активности.
+        --   - ROUND для средних и коэффициента стабильности
+        --   - Категория: низкая (<100 событий), средняя (100-299), высокая (≥300)
+        --   - Отсекаем строки с невалидными оценками (оставляем только 2,3,4,5)
         final_data AS (
             SELECT 
                 student_id,
@@ -169,6 +216,9 @@ def create_mart_performance():
             FROM with_department
             WHERE final_grade IN (2,3,4,5)
         )
+        -- Основной INSERT с конфликтным обновлением (UPSERT).
+        -- Если запись с таким (student_id, course_id) уже существует, обновляем все поля,
+        -- кроме первичного ключа, и проставляем новое время last_update.
         INSERT INTO dmr.analytics_student_performance (
             student_id, course_id, department_id, department_name,
             education_level, education_base, semester, course_year,
@@ -205,21 +255,27 @@ def create_mart_performance():
             last_update = CURRENT_TIMESTAMP;
         """
 
+        # Выполняем составной SQL-запрос
         with conn.cursor() as cur:
             cur.execute(sql_insert)
-            conn.commit()
-            print(f"Витрина заполнена. Затронуто строк: {cur.rowcount}")
+            conn.commit()   # Фиксируем транзакцию
+            print(f"Витрина заполнена. Затронуто строк: {cur.rowcount}")  # rowcount — количество вставленных/обновлённых строк
 
         print("Витрина dmr.analytics_student_performance успешно создана/обновлена.")
 
     except Exception as e:
+        # В случае любой ошибки выводим сообщение, откатываем транзакцию (если соединение открыто)
+        # и пробрасываем исключение выше, чтобы Airflow зафиксировал неудачу задачи.
         print(f"Ошибка: {e}")
         if conn:
             conn.rollback()
         raise
     finally:
+        # Гарантированно закрываем соединение с БД, освобождая ресурсы.
         if conn:
             conn.close()
 
+# Если скрипт запущен напрямую (например, для тестирования), а не импортирован как модуль,
+# выполняем функцию create_mart_performance().
 if __name__ == "__main__":
     create_mart_performance()

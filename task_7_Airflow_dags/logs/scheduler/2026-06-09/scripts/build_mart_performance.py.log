@@ -1,0 +1,5 @@
+[2026-06-09T19:14:23.942+0000] {processor.py:186} INFO - Started process (PID=7119) to work on /opt/airflow/dags/scripts/build_mart_performance.py
+[2026-06-09T19:14:23.943+0000] {processor.py:914} INFO - Processing file /opt/airflow/dags/scripts/build_mart_performance.py for tasks to queue
+[2026-06-09T19:14:23.945+0000] {logging_mixin.py:190} INFO - [2026-06-09T19:14:23.945+0000] {dagbag.py:588} INFO - Filling up the DagBag from /opt/airflow/dags/scripts/build_mart_performance.py
+[2026-06-09T19:14:23.956+0000] {processor.py:927} WARNING - No viable dags retrieved from /opt/airflow/dags/scripts/build_mart_performance.py
+[2026-06-09T19:14:23.967+0000] {processor.py:208} INFO - Processing /opt/airflow/dags/scripts/build_mart_performance.py took 0.029 seconds
