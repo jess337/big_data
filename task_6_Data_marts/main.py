@@ -193,8 +193,7 @@ def fill_data_mart(conn):
             SUM(s_a_submission_status_viewed) AS total_submissions,
             -- неделя с максимальным s_all (если несколько, берём первую)
             (array_agg(num_week ORDER BY s_all DESC))[1] AS peak_activity_week,
-            -- коэффициент стабильности: 1 - (stddev / mean), ограничен [0,1]
-            1 - LEAST(1, COALESCE(STDDEV(s_all) / NULLIF(AVG(s_all), 0), 0)) AS consistency_score
+            COUNT(CASE WHEN s_all > 0 THEN 1 END) * 1.0 / COUNT(*) AS consistency_score
         FROM student_week_stats
         GROUP BY userid, courseid
     ),
@@ -316,6 +315,5 @@ def main():
             conn.close()
             print("Соединение с БД закрыто.")
 
-# Если скрипт запущен напрямую (не импортирован как модуль), вызываем main
 if __name__ == "__main__":
     main()

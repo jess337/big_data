@@ -1,0 +1,136 @@
+# =============================================================================
+# ДОКЕР-КОМПОУЗ ДЛЯ APACHE AIRFLOW С КАСТОМНЫМИ СКРИПТАМИ
+# =============================================================================
+
+# Блок общих настроек, который будет использоваться во всех сервисах Airflow.
+# Используем YAML-якорь &airflow-common, чтобы не дублировать код.
+x-airflow-common:
+  &airflow-common
+  
+  # Сборка образа из Dockerfile в текущей директории.
+  # В Dockerfile добавляются Python-пакеты (pandas, faker, psycopg2-binary, matplotlib, seaborn, plotly).
+  build: .
+  
+  # Переменные окружения, общие для всех контейнеров Airflow (webserver, scheduler, init).
+  environment:
+    &airflow-common-env
+    
+    # --- Основные настройки Airflow ---
+    # Исполняющий механизм: LocalExecutor (запускает задачи на том же хосте, подходит для разработки)
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    
+    # Строка подключения к мета-базе Airflow (PostgreSQL, сервис 'postgres' в этой же сети)
+    # Используются переменные из .env: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    
+    # Ключ шифрования (пустая строка – отключаем шифрование, для тестов)
+    AIRFLOW__CORE__FERNET_KEY: ''
+    
+    # При создании DAG'и по умолчанию приостановлены (их надо включать вручную)
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    
+    # Не загружать примеры DAG'ов, которые поставляются с Airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    
+    # Настройка авторизации через базовую аутентификацию и сессии
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    
+    # Включить health check для планировщика (для Docker healthcheck)
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    
+    # --- Пользовательские переменные для нашего скрипта ---
+    # Они будут доступны в Python через os.getenv(...)
+    # Указывают на целевую базу данных, куда будут загружены синтетические данные.
+    DB_HOST: ${DB_HOST}               # обычно host.docker.internal (доступ к БД на хосте)
+    DB_PORT: ${DB_PORT}               # порт целевой БД (5433 для my_db_Korchagina)
+    DB_NAME: ${DB_NAME}               # имя базы (my_db_Korchagina)
+    DB_USER: ${DB_USER}               # пользователь (Korchagina)
+    DB_PASSWORD: ${DB_PASSWORD}       # пароль из .env
+    
+    # Добавляем кастомный PYTHONPATH, чтобы модули из папки scripts были видны при импорте.
+    PYTHONPATH: /opt/airflow/scripts
+  
+  # Монтирование томов (bind mounts) для передачи файлов между хостом и контейнером.
+  volumes:
+    - ./dags:/opt/airflow/dags          # папка с DAG-файлами (логика пайплайна)
+    - ./logs:/opt/airflow/logs          # логи Airflow (для отладки)
+    - ./plugins:/opt/airflow/plugins    # плагины (не используются, но папка нужна)
+    - ./scripts:/opt/airflow/scripts    # папка с нашими скриптами (generate_data, load_raw и т.д.)
+    - ./data:/opt/airflow/data          # папка для CSV-файлов и графиков, генерируемых задачами
+  
+  # Пользователь, под которым работают процессы внутри контейнера.
+  # По умолчанию AIRFLOW_UID=50000 (стандарт для официального образа).
+  user: "${AIRFLOW_UID:-50000}:0"
+  
+  # Зависимости: дожидаемся, пока сервис postgres станет здоров (service_healthy)
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+
+# =============================================================================
+# СЕРВИСЫ
+# =============================================================================
+
+services:
+  # ----- СУБД PostgreSQL для мета-данных Airflow -----
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}       # пользователь (из .env)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # пароль
+      POSTGRES_DB: ${POSTGRES_DB}           # имя базы (airflow)
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data   # сохраняем данные БД в томе
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]   # проверка готовности PostgreSQL
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+    ports:
+      - "5432:5432"       # пробрасываем порт на хост (может конфликтовать, если уже есть БД на 5432)
+
+  # ----- ВЕБ-СЕРВЕР AIRFLOW -----
+  airflow-webserver:
+    <<: *airflow-common                # наследуем все общие настройки
+    command: webserver                # запускаем веб-сервер
+    ports:
+      - "8080:8080"                   # интерфейс будет доступен на http://localhost:8080
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  # ----- ПЛАНИРОВЩИК (SCHEDULER) AIRFLOW -----
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  # ----- СЕРВИС ИНИЦИАЛИЗАЦИИ (однократный запуск для создания мета-базы и пользователя) -----
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'                     # обновить схему мета-базы
+      _AIRFLOW_WWW_USER_CREATE: 'true'                # создать пользователя веб-интерфейса
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}   # логин по умолчанию airflow
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}   # пароль по умолчанию airflow
+    profiles:
+      - init    # этот сервис запускается только при явном указании профиля (docker-compose up airflow-init)
+
+
+# =============================================================================
+# ТОМА ДЛЯ ХРАНЕНИЯ ДАННЫХ POSTGRESQL
+# =============================================================================
+volumes:
+  postgres-db-volume:    # именованный том, чтобы данные БД не терялись при перезапуске

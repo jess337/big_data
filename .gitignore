@@ -1,2 +1,21 @@
-answer.txt
+# Логи Airflow и прочие логи
+**/logs/
+**/logs/*
+*.log
+
+# Сгенерированные данные и графики
+**/data/
+*.csv
+*.png
+*.jpg
+
+# Временные файлы Python
+__pycache__/
+*.pyc
+
+# Секреты
 .env
+
+# Папка с результатами Airflow (IDZ/logs)
+IDZ/logs/
+IDZ/data/
